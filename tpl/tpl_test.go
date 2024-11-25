@@ -158,7 +158,10 @@ func TestTemplate(t *testing.T) {
 		}
 		values, err := vals(nil, test.Input)
 		assert.Nil(t, err)
-		output, err := executeTemplates(values, fileNames, test.Strict, "")
+		output, err := executeTemplates(values, fileNames, &options.Options{
+			IsStrict:  test.Strict,
+			OutputDir: "",
+		})
 		if test.Error {
 			assert.NotNil(t, err)
 		} else {
@@ -183,8 +186,8 @@ func TestOutputFolder(t *testing.T) {
 	defer os.RemoveAll(outPath)
 
 	opts := &options.Options{
-		IsStrict:   true,
-		OutputPath: outPath,
+		IsStrict:  true,
+		OutputDir: outPath,
 		SetValues: []string{
 			"name=paco",
 			"test=cat",

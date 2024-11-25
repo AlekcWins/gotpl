@@ -2,8 +2,9 @@ package tpl
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,23 +13,16 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/belitre/gotpl/commands/options"
+	"github.com/belitre/gotpl/tpl/helm"
 	"github.com/ghodss/yaml"
-	"github.com/otiai10/copy"
-	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/strvals"
 )
 
-func getFunctions() template.FuncMap {
+func getFunctions(t *template.Template) template.FuncMap {
 	f := sprig.TxtFuncMap()
 
 	// from Helm!
-	extra := template.FuncMap{
-		"toToml":   chartutil.ToToml,
-		"toYaml":   chartutil.ToYaml,
-		"fromYaml": chartutil.FromYaml,
-		"toJson":   chartutil.ToJson,
-		"fromJson": chartutil.FromJson,
-	}
+	extra := helm.InitFunMap(t)
 
 	for k, v := range extra {
 		f[k] = v
@@ -37,10 +31,14 @@ func getFunctions() template.FuncMap {
 	return f
 }
 
-func executeSingleTemplate(values map[string]interface{}, tplFile string, isStrict bool) (string, error) {
+func renderSingleTemplate(values map[string]interface{}, tplFile string, opts *options.Options) (string, error) {
+	if opts.IsValuesLikeHelm {
+		values["Values"] = values
+	}
 	buf := bytes.NewBuffer(nil)
-	tpl := template.New(path.Base(tplFile)).Funcs(getFunctions())
-	if isStrict {
+	tpl := template.New(path.Base(tplFile))
+	tpl.Funcs(getFunctions(tpl))
+	if opts.IsStrict {
 		tpl.Option("missingkey=error")
 	}
 
@@ -54,61 +52,50 @@ func executeSingleTemplate(values map[string]interface{}, tplFile string, isStri
 		return "", fmt.Errorf("Failed to parse standard input: %v", err)
 	}
 
-	// Work around to remove the "<no value>" go templates add.
-	return strings.Replace(buf.String(), "<no value>", "", -1), nil
+	return buf.String(), nil
 }
 
-func executeTemplates(values map[string]interface{}, tplFileNames []string, isStrict bool, outputPath string) (string, error) {
-	var result string
-	var tmpDir string
-	var err error
-	if len(outputPath) > 0 {
-		tmpDir, err = ioutil.TempDir("", "")
-
-		if err != nil {
-			return "", err
-		}
-		defer func() {
-			os.RemoveAll(tmpDir)
-		}()
+func executeTemplates(values map[string]interface{}, tplFileNames []string, opts *options.Options) (string, error) {
+	type resultItem struct {
+		*SrcDest
+		content string
 	}
+	results := make([]resultItem, 0, len(tplFileNames))
 
 	listFiles, err := getListFiles(tplFileNames)
-
 	if err != nil {
 		return "", err
 	}
 
 	for _, f := range listFiles {
-		r, err := executeSingleTemplate(values, f.src, isStrict)
+		r, err := renderSingleTemplate(values, f.src, opts)
 		if err != nil {
 			return "", err
 		}
-		if len(tmpDir) > 0 {
-			err = saveFile(path.Join(tmpDir, f.dest), r, f.perm)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			if len(result) == 0 {
-				result = r
-			} else {
-				result = fmt.Sprintf("%s\n%s", result, r)
-			}
-		}
+		results = append(results, resultItem{f, r})
+	}
+	if len(results) == 0 {
+		return "", errors.New("no template files after render templates")
 	}
 
-	if len(tmpDir) > 0 {
-		err := copy.Copy(tmpDir, outputPath)
+	if opts.OutputDir == "" {
+		return results[0].content, nil
+	}
+	for _, res := range results {
+		fileName := res.dest
+		if opts.OutputFileName != "" {
+			fileName = opts.OutputFileName
+		}
+		err = saveFile(path.Join(opts.OutputDir, fileName), res.content)
 		if err != nil {
 			return "", err
 		}
-	}
 
-	return result, nil
+	}
+	return "", nil
 }
 
-func saveFile(path string, contents string, perm os.FileMode) error {
+func saveFile(path string, contents string) error {
 	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
 		return err
 	}
@@ -119,10 +106,6 @@ func saveFile(path string, contents string, perm os.FileMode) error {
 	}
 
 	defer f.Close()
-
-	if err = f.Chmod(perm); err != nil {
-		return err
-	}
 
 	if _, err = f.WriteString(contents); err != nil {
 		return err
@@ -146,7 +129,8 @@ func ParseTemplate(tplFileNames []string, opts *options.Options) error {
 		return err
 	}
 
-	result, err := executeTemplates(values, tplFileNames, opts.IsStrict, opts.OutputPath)
+	result, err := executeTemplates(values, tplFileNames, opts)
+
 	if err != nil {
 		return err
 	}
@@ -217,9 +201,9 @@ func vals(valueFiles []string, values []string) (map[string]interface{}, error) 
 		var bytes []byte
 		var err error
 		if strings.TrimSpace(filePath) == "-" {
-			bytes, err = ioutil.ReadAll(os.Stdin)
+			bytes, err = io.ReadAll(os.Stdin)
 		} else {
-			bytes, err = ioutil.ReadFile(filePath)
+			bytes, err = os.ReadFile(filePath)
 		}
 
 		if err != nil {

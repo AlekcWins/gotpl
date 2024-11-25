@@ -31,15 +31,6 @@ func validateArgs(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("file %s not found", f)
 		}
 	}
-	if len(opt.OutputPath) > 0 {
-		info, err := os.Stat(opt.OutputPath)
-		if err != nil {
-			return fmt.Errorf("Path %s not found: %s", opt.OutputPath, err)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("Path %s is not a directory", opt.OutputPath)
-		}
-	}
 	return nil
 }
 
@@ -61,5 +52,7 @@ func init() {
 	rootCmd.Flags().StringArrayVarP(&opt.ValueFiles, "values", "f", []string{}, "specify values in a YAML or JSON files")
 	rootCmd.Flags().StringArrayVarP(&opt.SetValues, "set", "s", []string{}, "<key>=<value> pairs (take precedence over values in --values files)")
 	rootCmd.Flags().BoolVarP(&opt.IsStrict, "strict", "", false, "If strict is enabled, template rendering will fail if a template references a value that was not passed in")
-	rootCmd.Flags().StringVarP(&opt.OutputPath, "output", "o", "", "If an output path is provided, instead of stdout, gotpl will generate the output as files in the specified path")
+	rootCmd.Flags().StringVarP(&opt.OutputDir, "output-dir", "o", "", "If an output path is provided, instead of stdout, gotpl will generate the output as files in the specified path")
+	rootCmd.Flags().StringVarP(&opt.OutputFileName, "output-file-name", "", "", "change filename result")
+	rootCmd.Flags().BoolVarP(&opt.IsValuesLikeHelm, "helm-values", "", false, "Insert all values in .Values variable like  helm chart")
 }
